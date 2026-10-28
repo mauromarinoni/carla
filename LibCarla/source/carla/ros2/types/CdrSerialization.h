@@ -29,6 +29,7 @@
 #include "carla/ros2/types/msg/HazardLightsReport.h"
 #include "carla/ros2/types/msg/Header.h"
 #include "carla/ros2/types/msg/Image.h"
+#include "carla/ros2/types/msg/CompressedImage.h"
 #include "carla/ros2/types/msg/Imu.h"
 #include "carla/ros2/types/msg/Lateral.h"
 #include "carla/ros2/types/msg/Longitudinal.h"
@@ -794,6 +795,22 @@ inline void deserialize_cdr(
   cdr >> m.encoding;
   cdr >> m.is_bigendian;
   cdr >> m.step;
+  cdr >> m.data;
+}
+
+// --
+
+inline void serialize_cdr(
+    eprosima::fastcdr::Cdr& cdr, const msg::CompressedImage& m) {
+  serialize_cdr(cdr, m.header);
+  cdr << m.format;
+  cdr << m.data;
+}
+
+inline void deserialize_cdr(
+    eprosima::fastcdr::Cdr& cdr, msg::CompressedImage& m) {
+  deserialize_cdr(cdr, m.header);
+  cdr >> m.format;
   cdr >> m.data;
 }
 

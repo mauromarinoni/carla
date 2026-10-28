@@ -16,8 +16,8 @@ namespace ros2 {
 
 class CarlaRGBCameraPublisher : public CarlaCameraPublisher {
 public:
-  CarlaRGBCameraPublisher(std::string base_topic_name, std::string frame_id)
-    : CarlaCameraPublisher(std::move(base_topic_name), std::move(frame_id)) {}
+  CarlaRGBCameraPublisher(std::string base_topic_name, std::string frame_id, bool exact_topic = false)
+    : CarlaCameraPublisher(std::move(base_topic_name), std::move(frame_id), exact_topic) {}
 
 protected:
   [[nodiscard]] uint8_t GetChannels() const override { return 4; }

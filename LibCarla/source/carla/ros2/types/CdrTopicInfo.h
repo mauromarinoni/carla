@@ -23,6 +23,7 @@
 #include "carla/ros2/types/msg/HazardLightsReport.h"
 #include "carla/ros2/types/msg/Header.h"
 #include "carla/ros2/types/msg/Image.h"
+#include "carla/ros2/types/msg/CompressedImage.h"
 #include "carla/ros2/types/msg/Imu.h"
 #include "carla/ros2/types/msg/Lateral.h"
 #include "carla/ros2/types/msg/Longitudinal.h"
@@ -263,6 +264,16 @@ template<> struct CdrTopicInfo<msg::Image> {
     return "RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47";
   }
   static size_t max_serialized_size() { return 648u; }
+};
+
+template<> struct CdrTopicInfo<msg::CompressedImage> {
+  static const char* type_name() {
+    return "sensor_msgs::msg::dds_::CompressedImage_";
+  }
+  static const char* type_hash() {
+    return "RIHS01_15640771531571185e2efc8a100baf923961a4d15d5569652e6cb6691e8e371a";
+  }
+  static size_t max_serialized_size() { return 540u; }
 };
 
 template<> struct CdrTopicInfo<msg::Imu> {

@@ -24,10 +24,14 @@ namespace ros2 {
 template <typename Traits> class PublisherImpl;
 struct CarlaCameraImageMsgTraits;
 struct CarlaCameraInfoMsgTraits;
+struct CarlaCameraCompressedImageMsgTraits;
 
 class CarlaCameraPublisher : public BasePublisher {
 public:
-  CarlaCameraPublisher(std::string base_topic_name, std::string frame_id);
+  // Topics, following image_transport: base/image, base/image/compressed and
+  // base/camera_info; with exact_topic the base is the image topic itself
+  // (e.g. .../image_raw) and camera_info sits next to it.
+  CarlaCameraPublisher(std::string base_topic_name, std::string frame_id, bool exact_topic = false);
   ~CarlaCameraPublisher() override;
 
   CarlaCameraPublisher(const CarlaCameraPublisher &) = delete;
@@ -54,6 +58,14 @@ public:
       uint32_t width,
       const uint8_t *data);
 
+  // An already compressed image (sensor_msgs/CompressedImage, format e.g.
+  // "bgr8; jpeg compressed bgr8"); its writer is created on the first call.
+  bool WriteCompressedImage(
+      int32_t seconds,
+      uint32_t nanoseconds,
+      std::string format,
+      std::vector<uint8_t> data);
+
 protected:
   [[nodiscard]] virtual uint8_t GetChannels() const = 0;
   [[nodiscard]] virtual std::string GetEncoding() const = 0;
@@ -70,6 +82,11 @@ private:
 
   std::shared_ptr<PublisherImpl<CarlaCameraImageMsgTraits>> _impl_image;
   std::shared_ptr<PublisherImpl<CarlaCameraInfoMsgTraits>> _impl_camera_info;
+  std::shared_ptr<PublisherImpl<CarlaCameraCompressedImageMsgTraits>> _impl_compressed;
+  std::string _image_topic;
+  // what was written since the last Publish()
+  bool _image_written = false;
+  bool _compressed_written = false;
 };
 
 }  // namespace ros2
