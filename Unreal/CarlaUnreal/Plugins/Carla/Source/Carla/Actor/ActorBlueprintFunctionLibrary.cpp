@@ -252,6 +252,28 @@ static void FillIdAndTags(FActorDefinition &Def, TStrs &&...Strings)
     Var.bRestrictToRecommended = false;
     Def.Variations.Emplace(Var);
   }
+
+  // frame_id of the published messages (empty: the ros_name), e.g. a frame of
+  // the robot's own TF tree
+  {
+    FActorVariation Var;
+    Var.Id = TEXT("ros_frame_id");
+    Var.Type = EActorAttributeType::String;
+    Var.RecommendedValues = {TEXT("")};
+    Var.bRestrictToRecommended = false;
+    Def.Variations.Emplace(Var);
+  }
+
+  // Whether the actor's transform is published on /tf (off when its frame
+  // already belongs to the robot's own TF tree)
+  {
+    FActorVariation Var;
+    Var.Id = TEXT("ros_publish_tf");
+    Var.Type = EActorAttributeType::Bool;
+    Var.RecommendedValues = {TEXT("true")};
+    Var.bRestrictToRecommended = false;
+    Def.Variations.Emplace(Var);
+  }
 }
 
 static void AddRecommendedValuesForActorRoleName(
@@ -509,6 +531,21 @@ void UActorBlueprintFunctionLibrary::MakeCameraDefinition(
 
     Definition.Variations.Append({PostProccess, post_process_profile});
 
+    // ROS 2 image transport: raw sensor_msgs/Image, JPEG
+    // sensor_msgs/CompressedImage (compressed on the Unreal side) or both
+    FActorVariation RosImageTransport;
+    RosImageTransport.Id = TEXT("ros_image_transport");
+    RosImageTransport.Type = EActorAttributeType::String;
+    RosImageTransport.RecommendedValues = {TEXT("raw"), TEXT("compressed"), TEXT("both")};
+    RosImageTransport.bRestrictToRecommended = true;
+
+    FActorVariation RosJpegQuality;
+    RosJpegQuality.Id = TEXT("ros_jpeg_quality");
+    RosJpegQuality.Type = EActorAttributeType::Int;
+    RosJpegQuality.RecommendedValues = {TEXT("90")};
+    RosJpegQuality.bRestrictToRecommended = false;
+
+    Definition.Variations.Append({RosImageTransport, RosJpegQuality});
   }
 
   AddShowOnlyVariations(Definition);

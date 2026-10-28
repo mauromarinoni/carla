@@ -146,13 +146,19 @@ public:
   }
 
   // receiving data to publish
+  // compressed: the image already compressed on the Unreal side (RGB cameras,
+  // ros_image_transport), published as sensor_msgs/CompressedImage with the
+  // given format; publish_raw false leaves the raw sensor_msgs/Image out.
   void ProcessDataFromCamera(
       uint64_t sensor_type,
       carla::streaming::detail::stream_id_type stream_id,
       const carla::geom::Transform sensor_transform,
       int W, int H, float Fov,
       const carla::SharedBufferView buffer,
-      void *actor = nullptr);
+      void *actor = nullptr,
+      std::vector<uint8_t> compressed = {},
+      std::string compressed_format = {},
+      bool publish_raw = true);
   void ProcessDataFromGNSS(
       uint64_t sensor_type,
       carla::streaming::detail::stream_id_type stream_id,
