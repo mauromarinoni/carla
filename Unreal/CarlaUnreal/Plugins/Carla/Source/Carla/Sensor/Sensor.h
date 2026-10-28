@@ -10,6 +10,7 @@
 #include "Carla/Sensor/DataStream.h"
 #include "Carla/Util/RandomEngine.h"
 #include "Carla/Game/CarlaEngine.h"
+#include "Carla/Sensor/RosImageCompression.h"
 
 #include <util/disable-ue4-macros.h>
 #include <carla/Logging.h>
@@ -265,6 +266,17 @@ protected:
       if (FovOpt.has_value())
         Fov = FCString::Atof(*FovOpt->Value);
 
+      // JPEG for the cameras with a compressed ros_image_transport
+      FRosCompressedImage Compressed;
+      if constexpr (std::is_same_v<std::remove_const_t<ElementType>, FColor>)
+      {
+        if (SensorData.Num() == static_cast<int64>(W) * H)
+        {
+          TRACE_CPUPROFILER_EVENT_SCOPE_STR("ROS2 JPEG");
+          Compressed = CompressImageForRos(Sensor, SensorData.GetData(), W, H);
+        }
+      }
+
       ROS2->ProcessDataFromCamera(
         SensorTypeId,
         StreamId,
@@ -272,7 +284,10 @@ protected:
         W, H,
         Fov,
         BufferView,
-        &Sensor);
+        &Sensor,
+        std::move(Compressed.Data),
+        std::move(Compressed.Format),
+        Compressed.bPublishRaw);
     }
 #endif
 

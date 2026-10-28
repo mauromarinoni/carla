@@ -4,6 +4,7 @@
 #include "Settings/CarlaSettings.h"
 #include "Lights/LightDefaultsEditorPanel.h"
 #include "BlueprintLibary/LightDefaultsJsonUtils.h"
+#include "Sensor/RosImageCompression.h"
 
 #include <util/ue-header-guard-begin.h>
 #include "Developer/Settings/Public/ISettingsModule.h"
@@ -27,6 +28,7 @@ void FCarlaModule::StartupModule()
 	AddShaderSearchPaths();
 	RegisterSettings();
 	LoadChronoDll();
+	LoadRosImageCompression();
 	ULightDefaultsJsonUtils::RegisterRuntimeBuildingDefaultsHooks();
 #if WITH_EDITOR
 	RegisterLightDefaultsEditorTab();

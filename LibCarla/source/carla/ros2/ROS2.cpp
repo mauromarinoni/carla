@@ -52,6 +52,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -442,7 +443,13 @@ std::shared_ptr<CarlaCameraPublisher> ROS2::GetOrCreateCameraSensor(
   const std::string base_topic_name = BuildBaseTopicName(actor);
   const std::string frame_id = LookupFrameId(actor);
 
-  auto new_publisher = std::make_shared<CameraT>(base_topic_name, frame_id);
+  std::shared_ptr<CameraT> new_publisher;
+  if constexpr (std::is_same_v<CameraT, CarlaRGBCameraPublisher>) {
+    // exact image topic with a topic override (image_transport layout)
+    new_publisher = std::make_shared<CameraT>(base_topic_name, frame_id, HasTopicOverride(actor));
+  } else {
+    new_publisher = std::make_shared<CameraT>(base_topic_name, frame_id);
+  }
   _camera_publishers.insert({actor, new_publisher});
   return new_publisher;
 }
@@ -597,7 +604,10 @@ void ROS2::ProcessDataFromCamera(
     const carla::geom::Transform sensor_transform,
     int W, int H, float Fov,
     const carla::SharedBufferView buffer,
-    void *actor) {
+    void *actor,
+    std::vector<uint8_t> compressed,
+    std::string compressed_format,
+    bool publish_raw) {
   const Stamp stamp = GetStamp();
   // Image dimensions + FOV are now read straight from ImageSerializer's
   // per-frame header inside the camera publisher's WriteCameraInfo call;
@@ -658,9 +668,15 @@ void ROS2::ProcessDataFromCamera(
           const carla::sensor::s11n::ImageSerializer::ImageHeader *>(header_ptr);
       publisher->WriteCameraInfo(
           stamp.seconds, stamp.nanoseconds, 0, 0, header->height, header->width, header->fov_angle, true);
-      publisher->WriteImage(
-          stamp.seconds, stamp.nanoseconds, header->height, header->width,
-          buffer->data() + carla::sensor::s11n::ImageSerializer::header_offset);
+      if (publish_raw || compressed.empty()) {
+        publisher->WriteImage(
+            stamp.seconds, stamp.nanoseconds, header->height, header->width,
+            buffer->data() + carla::sensor::s11n::ImageSerializer::header_offset);
+      }
+      if (!compressed.empty()) {
+        publisher->WriteCompressedImage(
+            stamp.seconds, stamp.nanoseconds, std::move(compressed_format), std::move(compressed));
+      }
     }
     publisher->Publish();
   }
