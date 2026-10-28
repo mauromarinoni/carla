@@ -117,6 +117,7 @@ public class Carla :
       "Engine",
       "Foliage",
       "HTTP",
+      "ImageWrapper",
       "StaticMeshDescription",
       "ImageWriteQueue",
       "Json",
