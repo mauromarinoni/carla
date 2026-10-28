@@ -42,7 +42,10 @@ public:
 private:
   /// Compute the received intensity of the point
   float ComputeIntensity(const FSemanticDetection& RawDetection) const;
-  FDetection ComputeDetection(const FHitResult& HitInfo, const FTransform& InverseSensorTransform) const;
+  FDetection ComputeDetection(const FHitResult& HitInfo, const FTransform& InverseSensorTransform, const FVector& SensorLocation) const;
+  /// Reflectivity model: reflectivity of the tag hit times the cosine of the incidence angle
+  float ComputeReflectivityIntensity(const FHitResult& HitInfo, const FVector& SensorLocation) const;
+  void SetReflectivityTable(const FString& Overrides);
 
   void PreprocessRays(uint32_t Channels, uint32_t MaxPointsPerChannel) override;
   bool PostprocessDetection(FDetection& Detection) const;
@@ -65,6 +68,12 @@ private:
   /// beta = (1 - dropoff_zero_intensity)
   float DropOffAlpha;
   float DropOffBeta;
+
+  /// Intensity from the reflectivity of the semantic tag hit (intensity_model reflectivity)
+  bool ReflectivityIntensity = false;
+
+  /// Reflectivity in [0, 1] per semantic tag (index: crp::CityObjectLabel)
+  TArray<float> Reflectivity;
 
   // Way to access PointCloud data from the server.
   TArray<float> PointCloudLidarData;

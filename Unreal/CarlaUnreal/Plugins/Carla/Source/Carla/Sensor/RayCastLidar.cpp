@@ -7,6 +7,7 @@
 #include "Carla/Sensor/RayCastLidar.h"
 #include "Carla.h"
 #include "Carla/Actor/ActorBlueprintFunctionLibrary.h"
+#include "Carla/Game/Tagger.h"
 
 #include <util/disable-ue4-macros.h>
 #include "carla/geom/Math.h"
@@ -18,9 +19,51 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/CollisionProfile.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Landscape.h"
 #include <util/ue-header-guard-end.h>
 
 #include <cmath>
+
+namespace {
+
+  /// Typical reflectivity per semantic tag on the 0-255 scale of automotive
+  /// lidars (0-100: diffuse reflectance in percent, 101-255: retroreflectors),
+  /// to be calibrated against real data through reflectivity_table.
+  constexpr std::pair<crp::CityObjectLabel, float> DefaultReflectivity[] = {
+    {crp::CityObjectLabel::Roads, 12.0f},
+    {crp::CityObjectLabel::Sidewalks, 30.0f},
+    {crp::CityObjectLabel::Buildings, 40.0f},
+    {crp::CityObjectLabel::Walls, 40.0f},
+    {crp::CityObjectLabel::Fences, 30.0f},
+    {crp::CityObjectLabel::Poles, 40.0f},
+    {crp::CityObjectLabel::TrafficLight, 40.0f},
+    {crp::CityObjectLabel::TrafficSigns, 230.0f},
+    {crp::CityObjectLabel::Vegetation, 50.0f},
+    {crp::CityObjectLabel::Terrain, 35.0f},
+    {crp::CityObjectLabel::Sky, 0.0f},
+    {crp::CityObjectLabel::Pedestrians, 35.0f},
+    {crp::CityObjectLabel::Rider, 35.0f},
+    {crp::CityObjectLabel::Car, 30.0f},
+    {crp::CityObjectLabel::Truck, 35.0f},
+    {crp::CityObjectLabel::Bus, 35.0f},
+    {crp::CityObjectLabel::Train, 35.0f},
+    {crp::CityObjectLabel::Motorcycle, 30.0f},
+    {crp::CityObjectLabel::Bicycle, 30.0f},
+    {crp::CityObjectLabel::Static, 30.0f},
+    {crp::CityObjectLabel::Dynamic, 30.0f},
+    {crp::CityObjectLabel::Other, 30.0f},
+    {crp::CityObjectLabel::Water, 5.0f},
+    {crp::CityObjectLabel::RoadLines, 120.0f},
+    {crp::CityObjectLabel::Ground, 25.0f},
+    {crp::CityObjectLabel::Bridge, 35.0f},
+    {crp::CityObjectLabel::RailTrack, 25.0f},
+    {crp::CityObjectLabel::GuardRail, 60.0f},
+    {crp::CityObjectLabel::Rock, 30.0f},
+  };
+
+  constexpr float DiffuseReflectivityLimit = 100.0f / 255.0f;
+
+} // namespace
 
 FActorDefinition ARayCastLidar::GetSensorDefinition()
 {
@@ -55,6 +98,39 @@ void ARayCastLidar::Set(const FLidarDescription &LidarDescription)
   DropOffBeta = 1.0f - Description.DropOffAtZeroIntensity;
   DropOffAlpha = Description.DropOffAtZeroIntensity / Description.DropOffIntensityLimit;
   DropOffGenActive = Description.DropOffGenRate > std::numeric_limits<float>::epsilon();
+
+  ReflectivityIntensity = Description.IntensityModel.Equals(TEXT("reflectivity"), ESearchCase::IgnoreCase);
+  SetReflectivityTable(Description.ReflectivityTable);
+}
+
+void ARayCastLidar::SetReflectivityTable(const FString& Overrides)
+{
+  Reflectivity.Init(30.0f / 255.0f, 256);
+  Reflectivity[static_cast<int32>(crp::CityObjectLabel::None)] = 30.0f / 255.0f;
+  for (const auto& Entry : DefaultReflectivity)
+  {
+    Reflectivity[static_cast<int32>(Entry.first)] = Entry.second / 255.0f;
+  }
+  TArray<FString> Items;
+  Overrides.ParseIntoArray(Items, TEXT(","));
+  for (const FString& Item : Items)
+  {
+    FString Tag, Value;
+    if (!Item.Split(TEXT(":"), &Tag, &Value))
+    {
+      UE_LOG(LogCarla, Warning, TEXT("reflectivity_table: ignoring '%s' (expected tag:value)"), *Item);
+      continue;
+    }
+    Tag.TrimStartAndEndInline();
+    const int32 Index = Tag.IsNumeric() ?
+        FCString::Atoi(*Tag) : static_cast<int32>(ATagger::GetTagFromString(Tag));
+    if (!Reflectivity.IsValidIndex(Index) || (!Tag.IsNumeric() && Index == 0 && !Tag.Equals(TEXT("None"))))
+    {
+      UE_LOG(LogCarla, Warning, TEXT("reflectivity_table: unknown tag '%s'"), *Tag);
+      continue;
+    }
+    Reflectivity[Index] = FMath::Clamp(FCString::Atof(*Value), 0.0f, 255.0f) / 255.0f;
+  }
 }
 
 void ARayCastLidar::SendData(const float DeltaTime)
@@ -117,11 +193,43 @@ float ARayCastLidar::ComputeIntensity(const FSemanticDetection& RawDetection) co
   return IntRec;
 }
 
-ARayCastLidar::FDetection ARayCastLidar::ComputeDetection(const FHitResult& HitInfo, const FTransform& InverseSensorTransform) const
+float ARayCastLidar::ComputeReflectivityIntensity(const FHitResult& HitInfo, const FVector& SensorLocation) const
+{
+  // Semantic tag as the semantic lidar reads it (landscapes have no tags)
+  uint32_t Tag = static_cast<uint32_t>(crp::CityObjectLabel::None);
+  const AActor* Actor = HitInfo.GetActor();
+  if (Actor != nullptr && Actor->IsA<ALandscape>())
+  {
+    Tag = static_cast<uint32_t>(crp::CityObjectLabel::Terrain);
+  }
+  else if (HitInfo.Component.IsValid())
+  {
+    Tag = static_cast<uint32_t>(ATagger::GetTagOfTaggedComponent(*HitInfo.Component));
+  }
+  const float Value = Reflectivity.IsValidIndex(Tag) ? Reflectivity[Tag] : 0.0f;
+
+  const FVector Incidence = (SensorLocation - HitInfo.ImpactPoint).GetSafeNormal();
+  const float CosIncidence = FMath::Clamp(FVector::DotProduct(Incidence, HitInfo.ImpactNormal), 0.0f, 1.0f);
+  // Diffuse surfaces scatter as cos(incidence) (Lambert); retroreflectors send
+  // most of the light back whatever the angle
+  if (Value <= DiffuseReflectivityLimit)
+  {
+    return Value * CosIncidence;
+  }
+  return Value * (0.5f + 0.5f * CosIncidence);
+}
+
+ARayCastLidar::FDetection ARayCastLidar::ComputeDetection(const FHitResult& HitInfo, const FTransform& InverseSensorTransform, const FVector& SensorLocation) const
 {
   FDetection Detection;
   const FVector HitPoint = HitInfo.ImpactPoint;
   Detection.point = InverseSensorTransform.TransformPosition(HitPoint);
+
+  if (ReflectivityIntensity)
+  {
+    Detection.intensity = ComputeReflectivityIntensity(HitInfo, SensorLocation);
+    return Detection;
+  }
 
   const float Distance = Detection.point.Length();
 
@@ -158,6 +266,11 @@ ARayCastLidar::FDetection ARayCastLidar::ComputeDetection(const FHitResult& HitI
       Detection.point += Noise;
     }
 
+    if (ReflectivityIntensity && Description.IntensityNoiseStdDev > std::numeric_limits<float>::epsilon()) {
+      Detection.intensity = FMath::Clamp(
+          Detection.intensity + RandomEngine->GetNormalDistribution(0.0f, Description.IntensityNoiseStdDev), 0.0f, 1.0f);
+    }
+
     const float Intensity = Detection.intensity;
     if(Intensity > Description.DropOffIntensityLimit)
       return true;
@@ -170,9 +283,9 @@ ARayCastLidar::FDetection ARayCastLidar::ComputeDetection(const FHitResult& HitI
     ResetChannelDetections(Detections, Channels, MaxPointsPerChannel);
   }
 
-  void ARayCastLidar::WriteDetectionAsync(uint32_t Channel, const FHitResult& HitInfo, const FTransform& InverseSensorTransform, const FVector& /*SensorLocation*/) {
+  void ARayCastLidar::WriteDetectionAsync(uint32_t Channel, const FHitResult& HitInfo, const FTransform& InverseSensorTransform, const FVector& SensorLocation) {
     DEBUG_ASSERT(GetChannelCount() > Channel);
-    Detections[Channel].emplace_back(ComputeDetection(HitInfo, InverseSensorTransform));
+    Detections[Channel].emplace_back(ComputeDetection(HitInfo, InverseSensorTransform, SensorLocation));
   }
 
   void ARayCastLidar::ComputeAndSaveDetections(const FTransform& SensorTransform)
