@@ -1561,10 +1561,28 @@ void UActorBlueprintFunctionLibrary::MakeLidarDefinition(
   RosScanCutAngle.Id = TEXT("ros_scan_cut_angle");
   RosScanCutAngle.Type = EActorAttributeType::Float;
   RosScanCutAngle.RecommendedValues = {TEXT("180.0")};
+  // Intensity from the distance only, or from the reflectivity of what is hit.
+  FActorVariation IntensityModel;
+  IntensityModel.Id = TEXT("intensity_model");
+  IntensityModel.Type = EActorAttributeType::String;
+  IntensityModel.RecommendedValues = {TEXT("distance"), TEXT("reflectivity")};
+  IntensityModel.bRestrictToRecommended = true;
+  // Reflectivity per semantic tag replacing the defaults ("tag:value,...").
+  FActorVariation ReflectivityTable;
+  ReflectivityTable.Id = TEXT("reflectivity_table");
+  ReflectivityTable.Type = EActorAttributeType::String;
+  ReflectivityTable.RecommendedValues = {TEXT("")};
+  ReflectivityTable.bRestrictToRecommended = false;
+  // Noise of the reflectivity intensity.
+  FActorVariation IntensityNoiseStdDev;
+  IntensityNoiseStdDev.Id = TEXT("intensity_noise_stddev");
+  IntensityNoiseStdDev.Type = EActorAttributeType::Float;
+  IntensityNoiseStdDev.RecommendedValues = {TEXT("0.0")};
 
   if (Id == "ray_cast")
   {
     Definition.Variations.Append({RosDriverMode, RosScanCutAngle});
+    Definition.Variations.Append({IntensityModel, ReflectivityTable, IntensityNoiseStdDev});
     Definition.Variations.Append({Channels,
                                   Range,
                                   PointsPerSecond,
@@ -2579,6 +2597,12 @@ void UActorBlueprintFunctionLibrary::SetLidar(
       RetrieveActorAttributeToBool("ros_driver_mode", Description.Variations, Lidar.RosDriverMode);
   Lidar.RosScanCutAngle =
       RetrieveActorAttributeToFloat("ros_scan_cut_angle", Description.Variations, Lidar.RosScanCutAngle);
+  Lidar.IntensityModel =
+      RetrieveActorAttributeToString("intensity_model", Description.Variations, Lidar.IntensityModel);
+  Lidar.ReflectivityTable =
+      RetrieveActorAttributeToString("reflectivity_table", Description.Variations, Lidar.ReflectivityTable);
+  Lidar.IntensityNoiseStdDev =
+      RetrieveActorAttributeToFloat("intensity_noise_stddev", Description.Variations, Lidar.IntensityNoiseStdDev);
 }
 
 void UActorBlueprintFunctionLibrary::SetGnss(

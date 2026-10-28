@@ -83,4 +83,21 @@ struct CARLA_API FLidarDescription
   /// sensor frame (counter-clockwise from +X; 180 = behind the sensor).
   UPROPERTY(EditAnywhere)
   float RosScanCutAngle = 180.0f;
+
+  /// Intensity model: "distance" (atmospheric attenuation only) or
+  /// "reflectivity" (reflectivity of the semantic tag hit times the cosine of
+  /// the incidence angle; the reflectivity is on the 0-255 scale of automotive
+  /// lidars mapped to [0, 1]: 0-100 diffuse, 101-255 retroreflective).
+  UPROPERTY(EditAnywhere)
+  FString IntensityModel = TEXT("distance");
+
+  /// Reflectivity model: values replacing the defaults, "tag:value,..." with
+  /// the semantic tag name or number and a 0-255 reflectivity.
+  UPROPERTY(EditAnywhere)
+  FString ReflectivityTable;
+
+  /// Reflectivity model: standard deviation of the noise added to the
+  /// intensity, in [0, 1] units.
+  UPROPERTY(EditAnywhere)
+  float IntensityNoiseStdDev = 0.0f;
 };
