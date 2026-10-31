@@ -206,6 +206,8 @@ public:
   // when driver.enabled the steps are assembled into full rotations and a
   // message is published once per rotation, stamped at its first point, with
   // per-point time_stamp offsets and the lidar driver azimuth convention.
+  // channel_elevations (degrees, one per channel) replaces the uniform
+  // elevations between the FOV limits when not empty (channel table).
   void ProcessDataFromLidar(
       uint64_t sensor_type,
       carla::streaming::detail::stream_id_type stream_id,
@@ -213,6 +215,7 @@ public:
       uint32_t channel_count,
       float upper_fov_limit,
       float lower_fov_limit,
+      const std::vector<float> &channel_elevations,
       const LidarDriverOptions &driver,
       carla::sensor::data::LidarData &data,
       void *actor = nullptr);

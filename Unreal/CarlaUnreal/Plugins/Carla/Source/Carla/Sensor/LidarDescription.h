@@ -100,4 +100,36 @@ struct CARLA_API FLidarDescription
   /// intensity, in [0, 1] units.
   UPROPERTY(EditAnywhere)
   float IntensityNoiseStdDev = 0.0f;
+
+  /// Channel table (non-uniform lidars): comma-separated lists with one value
+  /// per channel, channel 0 first; empty = uniform channels. Elevation of each
+  /// channel in degrees (positive up), replacing UpperFovLimit/LowerFovLimit.
+  UPROPERTY(EditAnywhere)
+  FString ChannelElevations;
+
+  /// Channel table: horizontal offset of each channel from the sweep position,
+  /// in degrees, positive in the direction of rotation (clockwise seen from
+  /// above, as the azimuth offsets of a Hesai angle correction file).
+  UPROPERTY(EditAnywhere)
+  FString ChannelAzimuthOffsets;
+
+  /// Channel table: each channel fires only every k-th step of the base
+  /// horizontal resolution (integer k >= 1). PointsPerSecond then counts the
+  /// rays actually cast.
+  UPROPERTY(EditAnywhere)
+  FString ChannelHorizontalSteps;
+
+  /// Azimuth window (the FOV setting of a rotating lidar): the sensor still
+  /// turns over 360 degrees but fires only while the sweep position is from
+  /// the start to the end, in degrees from the sensor's +X, positive in the
+  /// direction of rotation (clockwise seen from above, as the azimuth
+  /// offsets); a window may cross 0 (start > end). Equal values (the default 0
+  /// and 360) = the whole rotation. PointsPerSecond stays the rate of the
+  /// whole rotation, so the resolution and the point times do not change.
+  /// Needs HorizontalFov 360.
+  UPROPERTY(EditAnywhere)
+  float AzimuthWindowStart = 0.0f;
+
+  UPROPERTY(EditAnywhere)
+  float AzimuthWindowEnd = 360.0f;
 };

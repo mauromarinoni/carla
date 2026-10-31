@@ -162,6 +162,17 @@ void ARayCastLidar::SendData(const float DeltaTime)
     Driver.slice.start_angle = LastSweepStartAngle;
     Driver.slice.sweep_angle = LastSweepAngle;
     Driver.slice.rays_per_channel = LastRaysPerChannel;
+    // Channel table: azimuth offsets for the firing order, elevations as cast
+    // for the elevation field (empty = uniform channels).
+    if (Driver.enabled && LaserAzimuthOffsets.Num() != 0)
+    {
+      Driver.slice.azimuth_offsets.assign(LaserAzimuthOffsets.GetData(), LaserAzimuthOffsets.GetData() + LaserAzimuthOffsets.Num());
+    }
+    std::vector<float> ChannelElevations;
+    if (bChannelTableElevations)
+    {
+      ChannelElevations.assign(LaserAngles.GetData(), LaserAngles.GetData() + LaserAngles.Num());
+    }
     // Passing the channel count and vertical FOV limits routes the publisher
     // through the extended Autoware XYZIRCAEDT layout (tier4 autoware-support
     // port); see ROS2::ProcessDataFromLidar.
@@ -169,12 +180,12 @@ void ARayCastLidar::SendData(const float DeltaTime)
     {
       FTransform LocalTransformRelativeToParent = GetActorTransform().GetRelativeTransform(ParentActor->GetActorTransform());
       ROS2->ProcessDataFromLidar(DataStream.GetSensorType(), StreamId, LocalTransformRelativeToParent,
-                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, Driver, LidarData, this);
+                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, ChannelElevations, Driver, LidarData, this);
     }
     else
     {
       ROS2->ProcessDataFromLidar(DataStream.GetSensorType(), StreamId, SensorTransform,
-                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, Driver, LidarData, this);
+                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, ChannelElevations, Driver, LidarData, this);
     }
   }
   #endif
