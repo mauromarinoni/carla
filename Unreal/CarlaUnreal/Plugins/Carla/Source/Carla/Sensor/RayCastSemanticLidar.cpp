@@ -25,8 +25,40 @@
 #include "Landscape.h"
 
 #include <cmath>
+#include <cstdlib>
 
 namespace crp = carla::rpc;
+
+namespace {
+
+  /// Parses a comma-separated list of numbers (channel table attribute).
+  /// Returns false on a malformed value; an empty text gives an empty list.
+  bool ParseChannelList(const FString &Text, TArray<float> &Values)
+  {
+    Values.Reset();
+    if (Text.TrimStartAndEnd().IsEmpty())
+    {
+      return true;
+    }
+    TArray<FString> Items;
+    Text.ParseIntoArray(Items, TEXT(","), /*InCullEmpty=*/false);
+    for (FString &Item : Items)
+    {
+      Item.TrimStartAndEndInline();
+      const auto Utf8 = StringCast<ANSICHAR>(*Item);
+      const char *Begin = Utf8.Get();
+      char *End = nullptr;
+      const double Value = std::strtod(Begin, &End);
+      if (Item.IsEmpty() || End == Begin || *End != '\0' || !std::isfinite(Value))
+      {
+        return false;
+      }
+      Values.Add(static_cast<float>(Value));
+    }
+    return true;
+  }
+
+} // namespace
 
 FActorDefinition ARayCastSemanticLidar::GetSensorDefinition()
 {
@@ -87,6 +119,99 @@ void ARayCastSemanticLidar::CreateLasers()
         Description.UpperFovLimit - static_cast<float>(i) * DeltaAngle;
     LaserAngles.Emplace(VerticalAngle);
   }
+
+  LaserAzimuthOffsets.Empty();
+  LaserHorizontalSteps.Empty();
+  bChannelTableElevations = false;
+  EffectiveChannelCount = static_cast<float>(NumberOfLasers);
+  BaseRayCounter = 0u;
+  CreateChannelTable();
+  CreateAzimuthWindow();
+}
+
+void ARayCastSemanticLidar::CreateAzimuthWindow()
+{
+  auto Wrap = [](float Angle) { const float A = std::fmod(Angle, 360.0f); return A < 0.0f ? A + 360.0f : A; };
+  AzimuthWindowStart = Wrap(Description.AzimuthWindowStart);
+  AzimuthWindowEnd = Wrap(Description.AzimuthWindowEnd);
+  bAzimuthWindow = !FMath::IsNearlyEqual(AzimuthWindowStart, AzimuthWindowEnd);
+  if (bAzimuthWindow && !FMath::IsNearlyEqual(Description.HorizontalFov, 360.0f))
+  {
+    UE_LOG(LogCarla, Error, TEXT("%s: azimuth_window_start / azimuth_window_end need horizontal_fov 360: whole rotation"),
+        *GetName());
+    bAzimuthWindow = false;
+  }
+  if (bAzimuthWindow)
+  {
+    UE_LOG(LogCarla, Log, TEXT("%s: azimuth window %.2f..%.2f deg"), *GetName(), AzimuthWindowStart, AzimuthWindowEnd);
+  }
+}
+
+void ARayCastSemanticLidar::CreateChannelTable()
+{
+  if (Description.ChannelElevations.TrimStartAndEnd().IsEmpty() &&
+      Description.ChannelAzimuthOffsets.TrimStartAndEnd().IsEmpty() &&
+      Description.ChannelHorizontalSteps.TrimStartAndEnd().IsEmpty())
+  {
+    return;
+  }
+
+  // Each list is optional, but a present one has a value per channel; any
+  // inconsistency drops the whole table (uniform channels).
+  const int32 NumberOfLasers = static_cast<int32>(Description.Channels);
+  TArray<float> Elevations, Offsets, Steps;
+  auto Check = [&](const TCHAR *Name, const FString &Text, TArray<float> &Values) {
+    if (!ParseChannelList(Text, Values))
+    {
+      UE_LOG(LogCarla, Error, TEXT("%s: %s is not a comma-separated list of numbers: uniform channels"), *GetName(), Name);
+      return false;
+    }
+    if (Values.Num() != 0 && Values.Num() != NumberOfLasers)
+    {
+      UE_LOG(LogCarla, Error, TEXT("%s: %s has %d values for %d channels: uniform channels"),
+          *GetName(), Name, Values.Num(), NumberOfLasers);
+      return false;
+    }
+    return true;
+  };
+  if (!Check(TEXT("channel_elevations"), Description.ChannelElevations, Elevations) ||
+      !Check(TEXT("channel_azimuth_offsets"), Description.ChannelAzimuthOffsets, Offsets) ||
+      !Check(TEXT("channel_horizontal_steps"), Description.ChannelHorizontalSteps, Steps))
+  {
+    return;
+  }
+  for (const float Step : Steps)
+  {
+    if (Step < 1.0f || Step != FMath::RoundToFloat(Step))
+    {
+      UE_LOG(LogCarla, Error, TEXT("%s: channel_horizontal_steps must be integers >= 1 (got %g): uniform channels"),
+          *GetName(), Step);
+      return;
+    }
+  }
+
+  if (Elevations.Num() != 0)
+  {
+    LaserAngles = Elevations;
+    bChannelTableElevations = true;
+  }
+  LaserAzimuthOffsets = Offsets;
+  if (Steps.Num() != 0)
+  {
+    EffectiveChannelCount = 0.0f;
+    LaserHorizontalSteps.Reserve(Steps.Num());
+    for (const float Step : Steps)
+    {
+      LaserHorizontalSteps.Add(static_cast<uint32>(Step));
+      EffectiveChannelCount += 1.0f / Step;
+    }
+  }
+  UE_LOG(LogCarla, Log, TEXT("%s: channel table for %d channels (elevations %s, azimuth offsets %s, horizontal steps %s, %.2f channels per ray)"),
+      *GetName(), NumberOfLasers,
+      Elevations.Num() ? TEXT("yes") : TEXT("no"),
+      Offsets.Num() ? TEXT("yes") : TEXT("no"),
+      Steps.Num() ? TEXT("yes") : TEXT("no"),
+      EffectiveChannelCount);
 }
 
 void ARayCastSemanticLidar::SendData(const float DeltaTime)
@@ -123,9 +248,12 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
 {
   TRACE_CPUPROFILER_EVENT_SCOPE(ARayCastSemanticLidar::SimulateLidar);
   const uint32 ChannelCount = Description.Channels;
+  // Base rays per channel: with horizontal steps a channel casts only every
+  // k-th of them and points_per_second counts the rays actually cast.
   const uint32 PointsToScanWithOneLaser =
     FMath::RoundHalfFromZero(
-        Description.PointsPerSecond * DeltaTime / float(ChannelCount));
+        Description.PointsPerSecond * DeltaTime /
+        (EffectiveChannelCount > 0.0f ? EffectiveChannelCount : float(ChannelCount)));
 
   if (PointsToScanWithOneLaser <= 0)
   {
@@ -153,6 +281,7 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
   const FTransform InverseSensorTransform = ActorTransform.Inverse();
   const FVector LidarBodyLocation = ActorTransform.GetLocation();
   const FRotator LidarBodyRotation = ActorTransform.Rotator();
+  const uint64 FirstBaseRay = BaseRayCounter;
 
   auto RunChannelRaycasts = [&]()
   {
@@ -166,6 +295,9 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
 
       const float VertAngle = LaserAngles[idxChannel];
       const std::vector<bool>& ChannelPreprocessCondition = RayPreprocessCondition[idxChannel];
+      // Channel table: horizontal offset and firing step of this channel.
+      const float AzimuthOffset = LaserAzimuthOffsets.Num() != 0 ? LaserAzimuthOffsets[idxChannel] : 0.0f;
+      const uint32 HorizontalStep = LaserHorizontalSteps.Num() != 0 ? LaserHorizontalSteps[idxChannel] : 1u;
 
       for (auto idxPtsOneLaser = 0u; idxPtsOneLaser < PointsToScanWithOneLaser; idxPtsOneLaser++) {
         // Rays dropped by a subclass's PreprocessRays.
@@ -173,10 +305,28 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
         {
           continue;
         }
+        // The channel fires only on every HorizontalStep-th base ray.
+        if (HorizontalStep > 1u && (FirstBaseRay + idxPtsOneLaser) % HorizontalStep != 0u)
+        {
+          continue;
+        }
 
         FHitResult HitResult;
-        const float HorizAngle = std::fmod(CurrentHorizontalAngle + AngleDistanceOfLaserMeasure
+        const float SweepAngle = std::fmod(CurrentHorizontalAngle + AngleDistanceOfLaserMeasure
             * idxPtsOneLaser, Description.HorizontalFov) - HalfHorizontalFov;
+        // Azimuth window: the firing (sweep) position from +X along the rotation.
+        if (bAzimuthWindow)
+        {
+          const float Position = SweepAngle < 0.0f ? SweepAngle + 360.0f : SweepAngle;
+          const bool bInside = AzimuthWindowStart < AzimuthWindowEnd
+              ? (Position >= AzimuthWindowStart && Position < AzimuthWindowEnd)
+              : (Position >= AzimuthWindowStart || Position < AzimuthWindowEnd);
+          if (!bInside)
+          {
+            continue;
+          }
+        }
+        const float HorizAngle = SweepAngle + AzimuthOffset;
 
         if (ShootLaser(VertAngle, HorizAngle, HitResult, TraceParams, LidarBodyLocation, LidarBodyRotation)) {
           WriteDetectionAsync(idxChannel, HitResult, InverseSensorTransform, LidarBodyLocation);
@@ -201,6 +351,7 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
   LastSweepStartAngle = CurrentHorizontalAngle;
   LastSweepAngle = AngleDistanceOfTick;
   LastRaysPerChannel = PointsToScanWithOneLaser;
+  BaseRayCounter += PointsToScanWithOneLaser;
 
   const float HorizontalAngle = carla::geom::Math::ToRadians(
       std::fmod(CurrentHorizontalAngle + AngleDistanceOfTick, Description.HorizontalFov));

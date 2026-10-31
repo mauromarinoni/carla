@@ -53,6 +53,12 @@ protected:
   /// Creates a Laser for each channel.
   void CreateLasers();
 
+  /// Applies the channel table attributes, if any, to the lasers.
+  void CreateChannelTable();
+
+  /// Applies the azimuth window attributes, if any.
+  void CreateAzimuthWindow();
+
   /// Shoot a laser ray-trace, return whether the laser hit something.
   bool ShootLaser(const float VerticalAngle, float HorizontalAngle, FHitResult &HitResult, FCollisionQueryParams& TraceParams,
                   const FVector &LidarBodyLocation, const FRotator &LidarBodyRotation) const;
@@ -145,7 +151,32 @@ protected:
   UPROPERTY(EditAnywhere)
   FLidarDescription Description;
 
+  /// Elevation of each channel [deg]: uniform between the FOV limits, or the
+  /// channel table (channel_elevations).
   TArray<float> LaserAngles;
+
+  /// Channel table: horizontal offset of each channel [deg]; empty = none.
+  TArray<float> LaserAzimuthOffsets;
+
+  /// Channel table: each channel fires every k-th base ray; empty = every ray.
+  TArray<uint32> LaserHorizontalSteps;
+
+  /// Whether LaserAngles comes from the channel table.
+  bool bChannelTableElevations = false;
+
+  /// Channels firing per base ray (sum of 1/k): the number of channels when
+  /// every channel fires on every ray.
+  float EffectiveChannelCount = 0.0f;
+
+  /// Base rays cast per channel since the lasers were created: the firing
+  /// phase of the channels with a horizontal step.
+  uint64 BaseRayCounter = 0u;
+
+  /// Azimuth window [deg, 0..360, from +X along the rotation]: rays are cast
+  /// only at sweep positions from the start to the end (wrapping through 0).
+  bool bAzimuthWindow = false;
+  float AzimuthWindowStart = 0.0f;
+  float AzimuthWindowEnd = 0.0f;
 
   std::vector<std::vector<bool>> RayPreprocessCondition;
   std::vector<uint32_t> PointsPerChannel;

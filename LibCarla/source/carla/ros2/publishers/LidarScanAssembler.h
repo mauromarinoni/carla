@@ -33,8 +33,12 @@ struct LidarSliceInfo {
   float start_angle{0.0f};
   // Horizontal angle swept during the step [deg].
   float sweep_angle{0.0f};
-  // Rays cast per channel during the step.
+  // Rays cast per channel during the step (base horizontal resolution; a
+  // channel with a horizontal step casts only some of them).
   std::uint32_t rays_per_channel{0u};
+  // Horizontal offset of each channel from the sweep position [deg, positive
+  // along the sweep], indexed by the point channel; empty = no offsets.
+  std::vector<float> azimuth_offsets{};
 };
 
 // Driver-like output of a rotating ray-cast lidar (ros_driver_mode).
@@ -52,7 +56,9 @@ struct LidarDriverOptions {
 // at the first point with a per-point time_stamp offset [ns] from that stamp.
 //
 // PointT needs float x, y (ROS sensor frame), an integral channel and a uint32
-// time_stamp. The sensor turns clockwise seen from above (CARLA's sweep
+// time_stamp. A channel with an azimuth offset is put back on the sweep
+// position of its firing, so the firing order and the rotation cut follow the
+// firing (encoder) azimuth, not the azimuth of the point. The sensor turns clockwise seen from above (CARLA's sweep
 // direction): the ROS azimuth atan2(y, x) decreases with time.
 template <typename PointT>
 class LidarScanAssembler {
@@ -96,7 +102,12 @@ public:
     for (auto &point : points) {
       // CARLA casts the ray at yaw (sweep position - 180 deg) in its
       // left-handed frame, i.e. at ROS azimuth (180 deg - sweep position).
-      const double sweep_pos = Wrap360(180.0 - Degrees(std::atan2(point.y, point.x)));
+      double sweep_pos = 180.0 - Degrees(std::atan2(point.y, point.x));
+      const auto channel = static_cast<std::size_t>(point.channel);
+      if (channel < slice.azimuth_offsets.size()) {
+        sweep_pos -= slice.azimuth_offsets[channel];
+      }
+      sweep_pos = Wrap360(sweep_pos);
       double phase = Wrap360(sweep_pos - start);
       if (phase > sweep + 0.5 * (360.0 - sweep)) {
         phase -= 360.0;  // a hair before the step start (float noise)

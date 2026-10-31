@@ -172,3 +172,82 @@ TEST(LidarScanAssembler, reset_on_time_jump) {
   EXPECT_EQ(scan->points.size(), 50u);
   EXPECT_NEAR(scan->stamp, 100.0 - 1000 * dt, 1e-9);
 }
+
+// Channel table: per-channel azimuth offsets and horizontal steps. The points
+// lie at sweep position + offset; the assembler puts each one back on its
+// firing, so the firing order and the cut follow the firing azimuth.
+TEST(LidarScanAssembler, channel_table_offsets_and_steps) {
+  constexpr double dt = 0.02;
+  constexpr double sweep = 72.0;
+  constexpr std::uint32_t rays = 180u;  // 0.4 deg base resolution
+  const std::vector<float> offsets{10.1f, -6.2f, 6.3f, -10.1f};
+  const std::vector<std::uint32_t> steps{2u, 2u, 1u, 1u};
+  const auto channels = static_cast<std::uint16_t>(offsets.size());
+  Assembler assembler(180.0f);
+  std::vector<Assembler::Scan> scans;
+  double start = 0.0;
+  std::uint64_t base_ray = 0u;
+  for (int step = 0; step < 11; ++step) {
+    std::vector<TestPoint> points;
+    for (std::uint16_t channel = 0u; channel < channels; ++channel) {
+      for (std::uint32_t i = 0u; i < rays; ++i) {
+        if ((base_ray + i) % steps[channel] != 0u) {
+          continue;
+        }
+        const double sweep_pos = start + sweep * i / rays + offsets[channel];
+        const double yaw = (sweep_pos - 180.0) * kPi / 180.0;
+        TestPoint point;
+        point.x = static_cast<float>(10.0 * std::cos(yaw));
+        point.y = static_cast<float>(-10.0 * std::sin(yaw));
+        point.channel = channel;
+        points.push_back(point);
+      }
+    }
+    auto info = MakeInfo(step, dt, start, sweep, rays);
+    info.azimuth_offsets = offsets;
+    auto scan = assembler.Add(info, std::move(points));
+    if (scan.has_value()) {
+      scans.push_back(std::move(*scan));
+    }
+    start = std::fmod(start + sweep, 360.0);
+    base_ray += rays;
+  }
+  ASSERT_EQ(scans.size(), 2u);
+  for (std::size_t k = 0; k < scans.size(); ++k) {
+    const auto &scan = scans[k];
+    // 900 base rays per rotation: 450 for the step-2 channels, 900 for the others.
+    ASSERT_EQ(scan.points.size(), 2u * 450u + 2u * 900u);
+    EXPECT_NEAR(scan.stamp, 100.0 + 5.0 * k * dt, 1e-9);
+    // Firing order: firing azimuth (point azimuth minus the offset) never
+    // decreasing, channels ascending within a firing, the step-2 channels on
+    // the even base rays only.
+    double previous = -1.0;
+    int previous_channel = -1;
+    std::size_t per_channel[4] = {0u, 0u, 0u, 0u};
+    for (std::size_t i = 0; i < scan.points.size(); ++i) {
+      const auto &point = scan.points[i];
+      const double firing = SweepPos(point, -0.2 + offsets[point.channel]) - offsets[point.channel];
+      ASSERT_GE(firing, -1e-3);
+      ASSERT_LT(firing, 360.0);
+      const auto ray = static_cast<std::int64_t>(std::llround(firing / 0.4));
+      EXPECT_NEAR(firing, ray * 0.4, 1e-3);
+      if (steps[point.channel] == 2u) {
+        EXPECT_EQ(ray % 2, 0);
+      }
+      if (std::abs(firing - previous) < 1e-3) {
+        EXPECT_GT(point.channel, previous_channel);
+      } else {
+        EXPECT_GT(firing, previous);
+      }
+      previous = firing;
+      previous_channel = point.channel;
+      ++per_channel[point.channel];
+      // Time of the step the ray was cast in.
+      EXPECT_EQ(point.time_stamp, static_cast<std::uint32_t>(std::llround(std::floor(ray / 180.0) * dt * 1e9)));
+    }
+    EXPECT_EQ(per_channel[0], 450u);
+    EXPECT_EQ(per_channel[1], 450u);
+    EXPECT_EQ(per_channel[2], 900u);
+    EXPECT_EQ(per_channel[3], 900u);
+  }
+}
