@@ -1615,11 +1615,42 @@ void UActorBlueprintFunctionLibrary::MakeLidarDefinition(
   IntensityNoiseStdDev.Id = TEXT("intensity_noise_stddev");
   IntensityNoiseStdDev.Type = EActorAttributeType::Float;
   IntensityNoiseStdDev.RecommendedValues = {TEXT("0.0")};
+  // Channel table of non-uniform lidars: comma-separated, one value per
+  // channel; empty = uniform channels between lower_fov and upper_fov.
+  FActorVariation ChannelElevations;
+  ChannelElevations.Id = TEXT("channel_elevations");
+  ChannelElevations.Type = EActorAttributeType::String;
+  ChannelElevations.RecommendedValues = {TEXT("")};
+  ChannelElevations.bRestrictToRecommended = false;
+  FActorVariation ChannelAzimuthOffsets;
+  ChannelAzimuthOffsets.Id = TEXT("channel_azimuth_offsets");
+  ChannelAzimuthOffsets.Type = EActorAttributeType::String;
+  ChannelAzimuthOffsets.RecommendedValues = {TEXT("")};
+  ChannelAzimuthOffsets.bRestrictToRecommended = false;
+  FActorVariation ChannelHorizontalSteps;
+  ChannelHorizontalSteps.Id = TEXT("channel_horizontal_steps");
+  ChannelHorizontalSteps.Type = EActorAttributeType::String;
+  ChannelHorizontalSteps.RecommendedValues = {TEXT("")};
+  ChannelHorizontalSteps.bRestrictToRecommended = false;
+  // Azimuth window of a rotating lidar [deg from +X, along the rotation];
+  // equal values = the whole rotation.
+  FActorVariation AzimuthWindowStart;
+  AzimuthWindowStart.Id = TEXT("azimuth_window_start");
+  AzimuthWindowStart.Type = EActorAttributeType::Float;
+  AzimuthWindowStart.RecommendedValues = {TEXT("0.0")};
+  AzimuthWindowStart.bRestrictToRecommended = false;
+  FActorVariation AzimuthWindowEnd;
+  AzimuthWindowEnd.Id = TEXT("azimuth_window_end");
+  AzimuthWindowEnd.Type = EActorAttributeType::Float;
+  AzimuthWindowEnd.RecommendedValues = {TEXT("360.0")};
+  AzimuthWindowEnd.bRestrictToRecommended = false;
 
   if (Id == "ray_cast")
   {
     Definition.Variations.Append({RosDriverMode, RosScanCutAngle});
     Definition.Variations.Append({IntensityModel, ReflectivityTable, IntensityNoiseStdDev});
+    Definition.Variations.Append({ChannelElevations, ChannelAzimuthOffsets, ChannelHorizontalSteps});
+    Definition.Variations.Append({AzimuthWindowStart, AzimuthWindowEnd});
     Definition.Variations.Append({Channels,
                                   Range,
                                   PointsPerSecond,
@@ -1665,6 +1696,8 @@ void UActorBlueprintFunctionLibrary::MakeLidarDefinition(
   }
   else if (Id == "ray_cast_semantic")
   {
+    Definition.Variations.Append({ChannelElevations, ChannelAzimuthOffsets, ChannelHorizontalSteps});
+    Definition.Variations.Append({AzimuthWindowStart, AzimuthWindowEnd});
     Definition.Variations.Append({Channels,
                                   Range,
                                   PointsPerSecond,
@@ -2649,6 +2682,16 @@ void UActorBlueprintFunctionLibrary::SetLidar(
       RetrieveActorAttributeToString("reflectivity_table", Description.Variations, Lidar.ReflectivityTable);
   Lidar.IntensityNoiseStdDev =
       RetrieveActorAttributeToFloat("intensity_noise_stddev", Description.Variations, Lidar.IntensityNoiseStdDev);
+  Lidar.ChannelElevations =
+      RetrieveActorAttributeToString("channel_elevations", Description.Variations, Lidar.ChannelElevations);
+  Lidar.ChannelAzimuthOffsets =
+      RetrieveActorAttributeToString("channel_azimuth_offsets", Description.Variations, Lidar.ChannelAzimuthOffsets);
+  Lidar.ChannelHorizontalSteps =
+      RetrieveActorAttributeToString("channel_horizontal_steps", Description.Variations, Lidar.ChannelHorizontalSteps);
+  Lidar.AzimuthWindowStart =
+      RetrieveActorAttributeToFloat("azimuth_window_start", Description.Variations, Lidar.AzimuthWindowStart);
+  Lidar.AzimuthWindowEnd =
+      RetrieveActorAttributeToFloat("azimuth_window_end", Description.Variations, Lidar.AzimuthWindowEnd);
 }
 
 void UActorBlueprintFunctionLibrary::SetGnss(
