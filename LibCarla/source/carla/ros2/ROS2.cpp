@@ -761,7 +761,7 @@ void ROS2::ProcessDataFromLidar(
   ProcessDataFromLidar(
       sensor_type, stream_id, sensor_transform,
       channel_count, upper_fov_limit, lower_fov_limit,
-      LidarDriverOptions{}, data, actor, azimuth_range);
+      std::vector<float>{}, LidarDriverOptions{}, data, actor, azimuth_range);
 }
 
 void ROS2::ProcessDataFromLidar(
@@ -771,6 +771,7 @@ void ROS2::ProcessDataFromLidar(
     uint32_t channel_count,
     float upper_fov_limit,
     float lower_fov_limit,
+    const std::vector<float> &channel_elevations,
     const LidarDriverOptions &driver,
     carla::sensor::data::LidarData &data,
     void *actor,
@@ -791,10 +792,17 @@ void ROS2::ProcessDataFromLidar(
       const float lower_rad = lower_fov_limit * static_cast<float>(M_PI) / 180.0f;
       std::vector<float> vertical_angles;
       vertical_angles.reserve(channel_count);
-      const float vertical_step =
-          (upper_rad - lower_rad) / static_cast<float>(channel_count - 1u);
-      for (uint32_t i = 0u; i < channel_count; ++i) {
-        vertical_angles.push_back(upper_rad - static_cast<float>(i) * vertical_step);
+      if (channel_elevations.size() == channel_count) {
+        // Channel table: the elevation of each channel as cast.
+        for (const float elevation : channel_elevations) {
+          vertical_angles.push_back(elevation * static_cast<float>(M_PI) / 180.0f);
+        }
+      } else {
+        const float vertical_step =
+            (upper_rad - lower_rad) / static_cast<float>(channel_count - 1u);
+        for (uint32_t i = 0u; i < channel_count; ++i) {
+          vertical_angles.push_back(upper_rad - static_cast<float>(i) * vertical_step);
+        }
       }
       const auto *channel_counts = data._header.data() + carla::sensor::data::LidarData::Index::SIZE;
       const auto channel_counts_size = data._header.size() - carla::sensor::data::LidarData::Index::SIZE;
