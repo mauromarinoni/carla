@@ -342,6 +342,46 @@ namespace ImageUtil
   // GPU sync in FlushBatchedReadbacks(). Render-thread access only.
   static TArray<ReadImageDataContext> GBatchedReadbacks;
 
+  static TAutoConsoleVariable<int32> CVarCameraAsyncDelivery(
+      TEXT("carla.Camera.AsyncDelivery"), 1,
+      TEXT("Deliver the batched camera images (decode, ROS 2 JPEG, publishing, client streams) on a worker after ")
+      TEXT("copying them out of the readback buffers (1), or on the render thread's flush (0)."));
+
+  // Deliveries running on workers (carla.Camera.AsyncDelivery): each batch waits for the previous one, so a
+  // camera's frames keep their order; sensors wait for them before going away (WaitForPendingDeliveries).
+  static FCriticalSection GDeliveryLock;
+  static FGraphEventRef GLastDelivery;
+
+  void WaitForPendingDeliveries()
+  {
+    FGraphEventRef Last;
+    {
+      FScopeLock Lock(&GDeliveryLock);
+      Last = GLastDelivery;
+    }
+    if (Last.IsValid())
+    {
+      TRACE_CPUPROFILER_EVENT_SCOPE_STR("WaitForPendingDeliveries");
+      FTaskGraphInterface::Get().WaitUntilTaskCompletes(Last);
+    }
+  }
+
+  static bool UseAsyncDelivery()
+  {
+    // Also from the command line (-carla-camera-async-delivery=0|1): a Shipping build runs no console commands.
+    static bool bCommandLineRead = false;
+    if (!bCommandLineRead)
+    {
+      bCommandLineRead = true;
+      int32 Value = 0;
+      if (FParse::Value(FCommandLine::Get(), TEXT("-carla-camera-async-delivery="), Value))
+      {
+        CVarCameraAsyncDelivery->Set(Value, ECVF_SetByCommandline);
+      }
+    }
+    return CVarCameraAsyncDelivery.GetValueOnRenderThread() != 0;
+  }
+
   static void ReadImageDataAddToBatch(ReadImageDataContext&& Context)
   {
     check(IsInRenderingThread());
@@ -390,6 +430,72 @@ namespace ImageUtil
       {
         Mapped[Index].Data = Batch[Index].Readback->Lock(
           Mapped[Index].RowPitch, &Mapped[Index].BufferHeight);
+      }
+      if (UseAsyncDelivery())
+      {
+        // Copy the images out of the readback buffers (they belong to the render thread and the pools) and deliver
+        // on a worker: the render thread, and the game thread waiting for it at the frame end, are free again.
+        struct FCopiedImage
+        {
+          TArray<uint8> Data;
+          int32 RowPitch = 0;
+          int32 BufferHeight = 0;
+          EPixelFormat Format = PF_Unknown;
+          FIntPoint Size = FIntPoint::ZeroValue;
+          ReadImageDataAsyncCallback Callback;
+        };
+        TSharedRef<TArray<FCopiedImage>> Copies = MakeShared<TArray<FCopiedImage>>();
+        Copies->SetNum(Batch.Num());
+        {
+          TRACE_CPUPROFILER_EVENT_SCOPE_STR("FlushBatchedReadbacks Copy");
+          ParallelFor(Batch.Num(), [&](int32 Index)
+          {
+            if (Mapped[Index].Data == nullptr)
+            {
+              return;
+            }
+            FCopiedImage &Copy = (*Copies)[Index];
+            const int64 Bytes = static_cast<int64>(Mapped[Index].RowPitch) * Mapped[Index].BufferHeight
+                * GPixelFormats[Batch[Index].Format].BlockBytes;
+            Copy.Data.SetNumUninitialized(Bytes);
+            FMemory::Memcpy(Copy.Data.GetData(), Mapped[Index].Data, Bytes);
+            Copy.RowPitch = Mapped[Index].RowPitch;
+            Copy.BufferHeight = Mapped[Index].BufferHeight;
+            Copy.Format = Batch[Index].Format;
+            Copy.Size = Batch[Index].Size;
+            Copy.Callback = std::move(Batch[Index].Callback);
+          });
+        }
+        for (int32 Index = 0; Index < Batch.Num(); ++Index)
+        {
+          if (Mapped[Index].Data != nullptr)
+            Batch[Index].Readback->Unlock();
+          if (Batch[Index].Pool && Batch[Index].SlotIndex != INDEX_NONE)
+            Batch[Index].Pool->Release(Batch[Index].SlotIndex);
+        }
+        FScopeLock Lock(&GDeliveryLock);
+        FGraphEventArray Prerequisites;
+        if (GLastDelivery.IsValid())
+        {
+          Prerequisites.Add(GLastDelivery);
+        }
+        GLastDelivery = FFunctionGraphTask::CreateAndDispatchWhenReady(
+          [Copies]()
+          {
+            TRACE_CPUPROFILER_EVENT_SCOPE_STR("FlushBatchedReadbacks Deliver");
+            ParallelFor(Copies->Num(), [&Copies](int32 Index)
+            {
+              FCopiedImage &Copy = (*Copies)[Index];
+              if (!Copy.Data.IsEmpty() && Copy.Callback)
+              {
+                Copy.Callback(Copy.Data.GetData(), Copy.RowPitch, Copy.BufferHeight, Copy.Format, Copy.Size);
+              }
+            });
+          },
+          TStatId(),
+          &Prerequisites,
+          ENamedThreads::AnyBackgroundHiPriTask);
+        return;
       }
       {
         TRACE_CPUPROFILER_EVENT_SCOPE_STR("FlushBatchedReadbacks Deliver");

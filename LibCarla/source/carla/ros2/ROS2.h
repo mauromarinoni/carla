@@ -158,7 +158,10 @@ public:
       void *actor = nullptr,
       std::vector<uint8_t> compressed = {},
       std::string compressed_format = {},
-      bool publish_raw = true);
+      bool publish_raw = true,
+      // Simulation time of the capture [s]; negative: the current frame's (the
+      // image may be delivered after the next frame has started).
+      double capture_time = -1.0);
   void ProcessDataFromGNSS(
       uint64_t sensor_type,
       carla::streaming::detail::stream_id_type stream_id,

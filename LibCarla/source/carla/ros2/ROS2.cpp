@@ -589,8 +589,16 @@ void ROS2::ProcessDataFromCamera(
     void *actor,
     std::vector<uint8_t> compressed,
     std::string compressed_format,
-    bool publish_raw) {
-  const Stamp stamp = GetStamp();
+    bool publish_raw,
+    double capture_time) {
+  Stamp stamp = GetStamp();
+  if (capture_time >= 0.0) {
+    double integral;
+    const double fractional = std::modf(capture_time, &integral);
+    stamp = Stamp{
+        static_cast<int32_t>(integral),
+        static_cast<uint32_t>(fractional * 1000000000.0)};
+  }
   // Image dimensions + FOV are now read straight from ImageSerializer's
   // per-frame header inside the camera publisher's WriteCameraInfo call;
   // the W/H/Fov arguments survive for ABI compatibility with the

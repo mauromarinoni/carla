@@ -305,7 +305,10 @@ protected:
         &Sensor,
         std::move(Compressed.Data),
         std::move(Compressed.Format),
-        Compressed.bPublishRaw);
+        Compressed.bPublishRaw,
+        // the capture's time: the image is delivered after the GPU readback,
+        // possibly once the next frame has started
+        CaptureContext.Timestamp);
     }
 #endif
 
