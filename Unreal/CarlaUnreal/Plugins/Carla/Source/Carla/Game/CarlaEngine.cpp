@@ -20,6 +20,7 @@
 #include "Carla/Traffic/TrafficLightManager.h"
 #include "Carla/Actor/ActorData.h"
 #include "Carla/Sensor/Sensor.h"
+#include "Carla/Sensor/CarlaLidarSubsystem.h"
 
 #include <util/disable-ue4-macros.h>
 #include <carla/Logging.h>
@@ -863,8 +864,24 @@ void FCarlaEngine::OnPreTick(UWorld *World, ELevelTick TickType, float DeltaSeco
     return;
   }
 
+  // The LiDARs' data of the last frame is sent on a worker (carla.Lidar.AsyncSend) and must be done before this
+  // frame's time and frame counter change. A Multi-GPU secondary waits here; the primary just before its clocks
+  // move, after the wait for the client's tick, so the sending also overlaps the client's turn (a LiDAR destroyed
+  // meanwhile waits for it in UCarlaLidarSubsystem::UnregisterLidar).
+  auto WaitForLidarSend = [World]()
+  {
+    if (World != nullptr)
+    {
+      if (UCarlaLidarSubsystem *LidarSubsystem = World->GetSubsystem<UCarlaLidarSubsystem>())
+      {
+        LidarSubsystem->WaitForPendingSend();
+      }
+    }
+  };
+
   if (!bIsPrimaryServer)
   {
+    WaitForLidarSend();
     const carla::multigpu::PreTickAction Action = carla::multigpu::DecidePreTick(
         bLoadMapPending,
         CurrentEpisode != nullptr,
@@ -979,6 +996,8 @@ void FCarlaEngine::OnPreTick(UWorld *World, ELevelTick TickType, float DeltaSeco
     Time.TimeDilation = WorldSettings ? WorldSettings->GetEffectiveTimeDilation() : 1.0f;
     PendingFrameTime = Time;
   }
+
+  WaitForLidarSend();
 
   // update frame counter
   UpdateFrameCounter();
