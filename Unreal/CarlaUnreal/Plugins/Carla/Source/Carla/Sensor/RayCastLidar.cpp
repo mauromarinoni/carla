@@ -137,34 +137,6 @@ void ARayCastLidar::SendData(const float DeltaTime)
 {
   TRACE_CPUPROFILER_EVENT_SCOPE(ARayCastLidar::SendData);
   auto DataStream = GetDataStream(*this);
-  if (AActor* ParentActor = GetAttachParentActor())
-  {
-    const FTransform ParentTransform = GetActorTransform().GetRelativeTransform(ParentActor->GetActorTransform());
-    SendPreparedData(DeltaTime, DataStream, &ParentTransform);
-  }
-  else
-  {
-    SendPreparedData(DeltaTime, DataStream, nullptr);
-  }
-}
-
-TUniqueFunction<void()> ARayCastLidar::PrepareAsyncSend(const float DeltaTime)
-{
-  // Actor state read here, on the game thread; LidarData and the sweep (LastSweep*) are read by the returned
-  // function, which the LiDAR subsystem runs after SimulateLidar and finishes before the next frame.
-  AActor* ParentActor = GetAttachParentActor();
-  const bool bHasParent = ParentActor != nullptr;
-  const FTransform ParentTransform = bHasParent
-      ? GetActorTransform().GetRelativeTransform(ParentActor->GetActorTransform()) : FTransform();
-  return [this, DeltaTime, DataStream = GetDataStream(*this), bHasParent, ParentTransform]() mutable
-  {
-    TRACE_CPUPROFILER_EVENT_SCOPE(ARayCastLidar::SendDataAsync);
-    SendPreparedData(DeltaTime, DataStream, bHasParent ? &ParentTransform : nullptr);
-  };
-}
-
-void ARayCastLidar::SendPreparedData(const float DeltaTime, FAsyncDataStream &DataStream, const FTransform *ParentTransform)
-{
   auto SensorTransform = DataStream.GetSensorTransform();
 
   {
@@ -178,6 +150,7 @@ void ARayCastLidar::SendPreparedData(const float DeltaTime, FAsyncDataStream &Da
   {
     TRACE_CPUPROFILER_EVENT_SCOPE_STR("ROS2 Send");
     auto StreamId = carla::streaming::detail::token_type(GetToken()).get_stream_id();
+    AActor* ParentActor = GetAttachParentActor();
     // Driver mode (rotating 360 deg sensors only): the publisher assembles the
     // steps into full rotations; it needs the sweep of this step. Every ray is
     // cast from the sensor pose at the step stamp (time_span 0).
@@ -205,10 +178,19 @@ void ARayCastLidar::SendPreparedData(const float DeltaTime, FAsyncDataStream &Da
     // port); see ROS2::ProcessDataFromLidar.
     const auto AzimuthRange = carla::ros2::LidarAzimuthRange::FromDegrees(
         Description.AzimuthClockwise, Description.AzimuthRangeStart, Description.AzimuthRangeEnd);
-    ROS2->ProcessDataFromLidar(DataStream.GetSensorType(), StreamId,
-                               ParentTransform != nullptr ? *ParentTransform : SensorTransform,
-                               Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, ChannelElevations, Driver, LidarData, this,
-                               AzimuthRange);
+    if (ParentActor)
+    {
+      FTransform LocalTransformRelativeToParent = GetActorTransform().GetRelativeTransform(ParentActor->GetActorTransform());
+      ROS2->ProcessDataFromLidar(DataStream.GetSensorType(), StreamId, LocalTransformRelativeToParent,
+                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, ChannelElevations, Driver, LidarData, this,
+                                 AzimuthRange);
+    }
+    else
+    {
+      ROS2->ProcessDataFromLidar(DataStream.GetSensorType(), StreamId, SensorTransform,
+                                 Description.Channels, Description.UpperFovLimit, Description.LowerFovLimit, ChannelElevations, Driver, LidarData, this,
+                                 AzimuthRange);
+    }
   }
   #endif
 }

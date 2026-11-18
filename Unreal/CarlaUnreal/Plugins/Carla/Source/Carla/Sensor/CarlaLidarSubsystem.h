@@ -49,10 +49,6 @@ public:
 
   void FinishLidarSimulations(UWorld *World, float DeltaSeconds);
 
-  /// Waits for the data of the last frame's LiDARs to be sent (carla.Lidar.AsyncSend): FCarlaEngine::OnPreTick calls
-  /// it before the frame's time and the server's commands change anything the sending reads.
-  void WaitForPendingSend();
-
 private:
 
   TArray<TWeakObjectPtr<ARayCastSemanticLidar>> ActiveLidars;
@@ -61,9 +57,4 @@ private:
   TArray<TObjectPtr<ARayCastSemanticLidar>> LidarsToSimulate;
 
   FGraphEventRef LidarSimulationTask;
-
-  /// Sending of the LiDARs' data on a worker (ARayCastSemanticLidar::PrepareAsyncSend), after the simulation task;
-  /// SendJobs, one per LiDAR of LidarsToSimulate (empty: sent on the game thread), stay alive until it is done.
-  TArray<TUniqueFunction<void()>> SendJobs;
-  FGraphEventRef LidarSendTask;
 };

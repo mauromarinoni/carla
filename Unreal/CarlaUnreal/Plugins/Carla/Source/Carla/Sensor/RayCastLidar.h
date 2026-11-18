@@ -37,8 +37,6 @@ public:
 
   virtual void SendData(const float DeltaTime) override;
 
-  virtual TUniqueFunction<void()> PrepareAsyncSend(const float DeltaTime) override;
-
   const TArray<float>& GetTestPointCloud() const { return PointCloudLidarData; };
 
 private:
@@ -55,10 +53,6 @@ private:
   void WriteDetectionAsync(uint32_t Channel, const FHitResult& HitInfo, const FTransform& InverseSensorTransform, const FVector& SensorLocation) override;
   void ResetDetections(uint32_t Channels, uint32_t MaxPointsPerChannel) override;
   void ComputeAndSaveDetections(const FTransform& SensorTransform) override;
-
-  /// SendData after its game thread part: ParentTransform is the sensor's transform relative to its parent, null
-  /// without a parent (the stream's sensor transform is used).
-  void SendPreparedData(const float DeltaTime, FAsyncDataStream &DataStream, const FTransform *ParentTransform);
 
   FLidarData LidarData;
 

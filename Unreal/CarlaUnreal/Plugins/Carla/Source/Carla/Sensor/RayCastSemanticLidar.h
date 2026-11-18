@@ -46,11 +46,6 @@ public:
 
   virtual void SendData(const float DeltaTime);
 
-  /// Game thread part of SendData (stream header: frame, time, transform; the transform to the parent), returning
-  /// the rest (serialization for the clients, ROS 2 message) to run on a worker after SimulateLidar, or an empty
-  /// function when this LiDAR sends only on the game thread (SendData).
-  virtual TUniqueFunction<void()> PrepareAsyncSend(const float DeltaTime) { return {}; }
-
   void GetMirrorState(carla::multigpu::SensorState &State) const override;
 
   void SetMirrorState(const carla::multigpu::SensorState &State) override;
