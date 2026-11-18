@@ -46,6 +46,11 @@ public:
 
   virtual void SendData(const float DeltaTime);
 
+  /// Game thread part of SendData (stream header: frame, time, transform; the transform to the parent), returning
+  /// the rest (serialization for the clients, ROS 2 message) to run on a worker after SimulateLidar, or an empty
+  /// function when this LiDAR sends only on the game thread (SendData).
+  virtual TUniqueFunction<void()> PrepareAsyncSend(const float DeltaTime) { return {}; }
+
   void GetMirrorState(carla::multigpu::SensorState &State) const override;
 
   void SetMirrorState(const carla::multigpu::SensorState &State) override;
@@ -190,6 +195,12 @@ protected:
   float LastSweepStartAngle = 0.0f;
   float LastSweepAngle = 0.0f;
   uint32 LastRaysPerChannel = 0u;
+
+  /// Hits of the last ray cast, one slot per (channel, base ray), for the cast split in tasks of a few rays
+  /// (carla.Lidar.RaysPerTask): the tasks fill them in any order, then the detections are written channel by channel
+  /// in ray order, as the one task per channel did.
+  TArray<FHitResult> RayHits;
+  TArray<uint8> RayHitFlags;
 
 private:
   FSemanticLidarData SemanticLidarData;
