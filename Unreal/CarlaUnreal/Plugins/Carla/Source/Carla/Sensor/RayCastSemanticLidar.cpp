@@ -27,6 +27,10 @@
 #include <cmath>
 #include <cstdlib>
 
+static TAutoConsoleVariable<int32> CVarLidarRaysPerTask(
+    TEXT("carla.Lidar.RaysPerTask"), 32,
+    TEXT("Rays of a channel cast per parallel task (0: one task per channel, the original split)."));
+
 namespace crp = carla::rpc;
 
 namespace {
@@ -278,56 +282,103 @@ void ARayCastSemanticLidar::SimulateLidar(const float DeltaTime, bool bLockPhysi
   const FRotator LidarBodyRotation = ActorTransform.Rotator();
   const uint64 FirstBaseRay = BaseRayCounter;
 
+  // One ray: false when it is not cast (preprocess drop, horizontal step, azimuth window) or hits nothing.
+  auto CastRay = [&](uint32 idxChannel, uint32 idxPtsOneLaser, FCollisionQueryParams& TraceParams,
+                     FHitResult& HitResult) -> bool
+  {
+    // Rays dropped by a subclass's PreprocessRays.
+    if (!RayPreprocessCondition[idxChannel][idxPtsOneLaser])
+    {
+      return false;
+    }
+    // The channel fires only on every HorizontalStep-th base ray.
+    const uint32 HorizontalStep = LaserHorizontalSteps.Num() != 0 ? LaserHorizontalSteps[idxChannel] : 1u;
+    if (HorizontalStep > 1u && (FirstBaseRay + idxPtsOneLaser) % HorizontalStep != 0u)
+    {
+      return false;
+    }
+    const float SweepAngle = std::fmod(CurrentHorizontalAngle + AngleDistanceOfLaserMeasure
+        * idxPtsOneLaser, Description.HorizontalFov) - HalfHorizontalFov;
+    // Azimuth window: the firing (sweep) position from +X along the rotation.
+    if (bAzimuthWindow)
+    {
+      const float Position = SweepAngle < 0.0f ? SweepAngle + 360.0f : SweepAngle;
+      const bool bInside = AzimuthWindowStart < AzimuthWindowEnd
+          ? (Position >= AzimuthWindowStart && Position < AzimuthWindowEnd)
+          : (Position >= AzimuthWindowStart || Position < AzimuthWindowEnd);
+      if (!bInside)
+      {
+        return false;
+      }
+    }
+    // Channel table: horizontal offset of this channel.
+    const float AzimuthOffset = LaserAzimuthOffsets.Num() != 0 ? LaserAzimuthOffsets[idxChannel] : 0.0f;
+    return ShootLaser(LaserAngles[idxChannel], SweepAngle + AzimuthOffset, HitResult, TraceParams,
+        LidarBodyLocation, LidarBodyRotation);
+  };
+
+  auto MakeTraceParams = [this]()
+  {
+    FCollisionQueryParams TraceParams = FCollisionQueryParams(FName(TEXT("Laser_Trace")), true, this);
+    TraceParams.bTraceComplex = true;
+    TraceParams.bReturnPhysicalMaterial = false;
+    return TraceParams;
+  };
+
+  const uint32 RaysPerTask = static_cast<uint32>(FMath::Max(0, CVarLidarRaysPerTask.GetValueOnAnyThread()));
+
   auto RunChannelRaycasts = [&]()
   {
     TRACE_CPUPROFILER_EVENT_SCOPE(ParallelFor);
-    ParallelFor(ChannelCount, [&](int32 idxChannel) {
-      TRACE_CPUPROFILER_EVENT_SCOPE(ParallelForTask);
-
-      FCollisionQueryParams TraceParams = FCollisionQueryParams(FName(TEXT("Laser_Trace")), true, this);
-      TraceParams.bTraceComplex = true;
-      TraceParams.bReturnPhysicalMaterial = false;
-
-      const float VertAngle = LaserAngles[idxChannel];
-      const std::vector<bool>& ChannelPreprocessCondition = RayPreprocessCondition[idxChannel];
-      // Channel table: horizontal offset and firing step of this channel.
-      const float AzimuthOffset = LaserAzimuthOffsets.Num() != 0 ? LaserAzimuthOffsets[idxChannel] : 0.0f;
-      const uint32 HorizontalStep = LaserHorizontalSteps.Num() != 0 ? LaserHorizontalSteps[idxChannel] : 1u;
-
-      for (auto idxPtsOneLaser = 0u; idxPtsOneLaser < PointsToScanWithOneLaser; idxPtsOneLaser++) {
-        // Rays dropped by a subclass's PreprocessRays.
-        if (!ChannelPreprocessCondition[idxPtsOneLaser])
-        {
-          continue;
-        }
-        // The channel fires only on every HorizontalStep-th base ray.
-        if (HorizontalStep > 1u && (FirstBaseRay + idxPtsOneLaser) % HorizontalStep != 0u)
-        {
-          continue;
-        }
-
-        FHitResult HitResult;
-        const float SweepAngle = std::fmod(CurrentHorizontalAngle + AngleDistanceOfLaserMeasure
-            * idxPtsOneLaser, Description.HorizontalFov) - HalfHorizontalFov;
-        // Azimuth window: the firing (sweep) position from +X along the rotation.
-        if (bAzimuthWindow)
-        {
-          const float Position = SweepAngle < 0.0f ? SweepAngle + 360.0f : SweepAngle;
-          const bool bInside = AzimuthWindowStart < AzimuthWindowEnd
-              ? (Position >= AzimuthWindowStart && Position < AzimuthWindowEnd)
-              : (Position >= AzimuthWindowStart || Position < AzimuthWindowEnd);
-          if (!bInside)
-          {
-            continue;
+    if (RaysPerTask == 0u || RaysPerTask >= PointsToScanWithOneLaser)
+    {
+      // One task per channel, the detections written as the rays hit.
+      ParallelFor(ChannelCount, [&](int32 idxChannel) {
+        TRACE_CPUPROFILER_EVENT_SCOPE(ParallelForTask);
+        FCollisionQueryParams TraceParams = MakeTraceParams();
+        for (auto idxPtsOneLaser = 0u; idxPtsOneLaser < PointsToScanWithOneLaser; idxPtsOneLaser++) {
+          FHitResult HitResult;
+          if (CastRay(idxChannel, idxPtsOneLaser, TraceParams, HitResult)) {
+            WriteDetectionAsync(idxChannel, HitResult, InverseSensorTransform, LidarBodyLocation);
           }
         }
-        const float HorizAngle = SweepAngle + AzimuthOffset;
+      });
+      return;
+    }
 
-        if (ShootLaser(VertAngle, HorizAngle, HitResult, TraceParams, LidarBodyLocation, LidarBodyRotation)) {
-          WriteDetectionAsync(idxChannel, HitResult, InverseSensorTransform, LidarBodyLocation);
-        }
-      };
+    // Tasks of RaysPerTask rays (a channel of the XT32 is ~400 rays, one of the QT128 ~70-140: one task per
+    // channel left the workers half idle on the longest ones); the hits are kept per ray and written below in
+    // channel and ray order, so the detections are the same as with one task per channel.
+    const uint32 TasksPerChannel = FMath::DivideAndRoundUp(PointsToScanWithOneLaser, RaysPerTask);
+    const int32 RayCount = static_cast<int32>(ChannelCount * PointsToScanWithOneLaser);
+    if (RayHits.Num() < RayCount)
+    {
+      RayHits.SetNum(RayCount);
+    }
+    RayHitFlags.SetNumUninitialized(RayCount);
+    ParallelFor(static_cast<int32>(ChannelCount * TasksPerChannel), [&](int32 idxTask) {
+      TRACE_CPUPROFILER_EVENT_SCOPE(ParallelForTask);
+      FCollisionQueryParams TraceParams = MakeTraceParams();
+      const uint32 idxChannel = static_cast<uint32>(idxTask) / TasksPerChannel;
+      const uint32 First = (static_cast<uint32>(idxTask) % TasksPerChannel) * RaysPerTask;
+      const uint32 Last = FMath::Min(First + RaysPerTask, PointsToScanWithOneLaser);
+      for (uint32 idxPtsOneLaser = First; idxPtsOneLaser < Last; idxPtsOneLaser++) {
+        const int32 Slot = static_cast<int32>(idxChannel * PointsToScanWithOneLaser + idxPtsOneLaser);
+        RayHits[Slot].Reset();
+        RayHitFlags[Slot] = CastRay(idxChannel, idxPtsOneLaser, TraceParams, RayHits[Slot]) ? 1u : 0u;
+      }
     });
+    {
+      TRACE_CPUPROFILER_EVENT_SCOPE(WriteDetections);
+      ParallelFor(ChannelCount, [&](int32 idxChannel) {
+        const int32 Base = idxChannel * static_cast<int32>(PointsToScanWithOneLaser);
+        for (uint32 idxPtsOneLaser = 0u; idxPtsOneLaser < PointsToScanWithOneLaser; idxPtsOneLaser++) {
+          if (RayHitFlags[Base + idxPtsOneLaser] != 0u) {
+            WriteDetectionAsync(idxChannel, RayHits[Base + idxPtsOneLaser], InverseSensorTransform, LidarBodyLocation);
+          }
+        }
+      });
+    }
   };
 
   if (bLockPhysics)

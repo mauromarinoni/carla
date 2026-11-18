@@ -20,6 +20,22 @@ static TAutoConsoleVariable<int32> CVarLidarBatch(
     TEXT("carla.Lidar.Batch"), 1,
     TEXT("Simulate multiple LiDARs in parallel (1) or one after another (0)."));
 
+static TAutoConsoleVariable<int32> CVarLidarAsyncSend(
+    TEXT("carla.Lidar.AsyncSend"), 1,
+    TEXT("Send the LiDARs' data (clients, ROS 2) on a worker after the ray casts, finished before the next frame (1), ")
+    TEXT("or on the game thread at the end of the post-physics tick (0)."));
+
+void UCarlaLidarSubsystem::WaitForPendingSend()
+{
+  if (LidarSendTask.IsValid())
+  {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UCarlaLidarSubsystem::WaitForPendingSend);
+    FTaskGraphInterface::Get().WaitUntilTaskCompletes(LidarSendTask);
+    LidarSendTask = nullptr;
+  }
+  SendJobs.Reset();
+}
+
 void UCarlaLidarSubsystem::Deinitialize()
 {
   if (LidarSimulationTask.IsValid())
@@ -27,6 +43,7 @@ void UCarlaLidarSubsystem::Deinitialize()
     FTaskGraphInterface::Get().WaitUntilTaskCompletes(LidarSimulationTask);
     LidarSimulationTask = nullptr;
   }
+  WaitForPendingSend();
   LidarsToSimulate.Empty();
   ActiveLidars.Empty();
   Super::Deinitialize();
@@ -49,6 +66,8 @@ void UCarlaLidarSubsystem::RegisterLidar(ARayCastSemanticLidar *Lidar)
 
 void UCarlaLidarSubsystem::UnregisterLidar(ARayCastSemanticLidar *Lidar)
 {
+  // Its data of the last frame may still be being sent.
+  WaitForPendingSend();
   ActiveLidars.Remove(Lidar);
   ActiveLidars.RemoveAll([](const TWeakObjectPtr<ARayCastSemanticLidar>& Ptr) { return !Ptr.IsValid(); });
 }
@@ -60,6 +79,21 @@ void UCarlaLidarSubsystem::StartLidarSimulations(UWorld *World, [[maybe_unused]]
   if (World == nullptr || World->GetPhysicsScene() == nullptr || !HasActiveLidars())
   {
     return;
+  }
+
+  WaitForPendingSend();
+
+  // The CVars from the command line too (-carla-lidar-async-send=0|1): a Shipping build runs no console commands.
+  static bool bCommandLineRead = false;
+  if (!bCommandLineRead)
+  {
+    bCommandLineRead = true;
+    int32 Value = 0;
+    if (FParse::Value(FCommandLine::Get(), TEXT("-carla-lidar-async-send="), Value))
+    {
+      CVarLidarAsyncSend->Set(Value, ECVF_SetByCommandline);
+      UE_LOG(LogCarla, Log, TEXT("carla.Lidar.AsyncSend = %d (command line)"), Value);
+    }
   }
 
   // Snapshot on the game thread; the task must not read ActiveLidars while the game thread can modify it.
@@ -120,6 +154,40 @@ void UCarlaLidarSubsystem::StartLidarSimulations(UWorld *World, [[maybe_unused]]
     nullptr,
     ENamedThreads::AnyBackgroundHiPriTask
   );
+
+  // The data is sent as soon as the ray casts end, alongside the cameras' readback and the rest of the frame.
+  if (CVarLidarAsyncSend.GetValueOnGameThread() != 0)
+  {
+    bool bAnyJob = false;
+    for (ARayCastSemanticLidar *Lidar : LidarsToSimulate)
+    {
+      SendJobs.Add(Lidar->PrepareAsyncSend(Lidar->GetReadyToTickDeltaSeconds()));
+      bAnyJob |= static_cast<bool>(SendJobs.Last());
+    }
+    if (bAnyJob)
+    {
+      FGraphEventArray Prerequisites;
+      Prerequisites.Add(LidarSimulationTask);
+      LidarSendTask = FFunctionGraphTask::CreateAndDispatchWhenReady(
+        [this]()
+        {
+          TRACE_CPUPROFILER_EVENT_SCOPE(TaskGraphLidarSend);
+          // One after another, as on the game thread: concurrent with the cameras' ROS 2 sending only, which
+          // already runs on the render thread.
+          for (TUniqueFunction<void()> &Job : SendJobs)
+          {
+            if (Job)
+            {
+              Job();
+            }
+          }
+        },
+        TStatId(),
+        &Prerequisites,
+        ENamedThreads::AnyBackgroundHiPriTask
+      );
+    }
+  }
 }
 
 void UCarlaLidarSubsystem::FinishLidarSimulations(UWorld *World, [[maybe_unused]] float DeltaSeconds)
@@ -135,11 +203,16 @@ void UCarlaLidarSubsystem::FinishLidarSimulations(UWorld *World, [[maybe_unused]
   // Streaming and ROS2 publishing stay on the game thread.
   {
     TRACE_CPUPROFILER_EVENT_SCOPE(LidarSendData);
-    for (ARayCastSemanticLidar *Lidar : LidarsToSimulate)
+    for (int32 Index = 0; Index < LidarsToSimulate.Num(); ++Index)
     {
+      ARayCastSemanticLidar *Lidar = LidarsToSimulate[Index];
       if (IsValid(Lidar))
       {
-        Lidar->SendData(Lidar->GetReadyToTickDeltaSeconds());
+        // Sent by the send task (StartLidarSimulations) or here.
+        if (!SendJobs.IsValidIndex(Index) || !SendJobs[Index])
+        {
+          Lidar->SendData(Lidar->GetReadyToTickDeltaSeconds());
+        }
         Lidar->ClearReadyToTick();
       }
     }
