@@ -5,6 +5,7 @@
 // For a copy, see <https://opensource.org/licenses/MIT>.
 
 #include "Carla/Sensor/SceneCaptureSensor.h"
+#include "Carla/Sensor/ImageUtil.h"
 #include "Carla/Sensor/PostProcessConfig.h"
 #include "Carla.h"
 #include "Carla/Game/CarlaStatics.h"
@@ -1329,6 +1330,8 @@ void ASceneCaptureSensor::EndPlay(const EEndPlayReason::Type EndPlayReason)
   if (CaptureComponent2D)
   {
     FlushRenderingCommands();
+    // Its last images may still be being delivered on a worker.
+    ImageUtil::WaitForPendingDeliveries();
     CaptureComponent2D->Deactivate();
     CaptureComponent2D->ReleaseViewStates();
   }

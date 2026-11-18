@@ -161,6 +161,10 @@ namespace ImageUtil
   // per-tick "all sensors delivered" simulation guarantee.
   void FlushBatchedReadbacks();
 
+  // Waits for the batched images being delivered on workers (carla.Camera.AsyncDelivery): a sensor calls it, after
+  // FlushRenderingCommands, before going away.
+  void WaitForPendingDeliveries();
+
 
 
   // Asynchronously reads the contents of the specified AShaderBasedSensor
