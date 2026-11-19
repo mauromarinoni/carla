@@ -197,11 +197,14 @@ carla_dependency_option (RPCLIB_GENERATE_COMPDB OFF)
 carla_dependency_option (RPCLIB_BUILD_EXAMPLES OFF)
 carla_dependency_option (RPCLIB_ENABLE_LOGGING OFF)
 carla_dependency_option (RPCLIB_ENABLE_COVERAGE OFF)
+# CarlaAutoware: branch carla (bbfe141) + the accept fix of carla-simulator/rpclib#3 (a peer that resets before the
+# accept handler terminated the server: port 2000, Traffic Manager 8000). Back to the line below once it is merged.
+#   https://github.com/carla-simulator/rpclib/archive/refs/heads/${CARLA_RPCLIB_TAG}.zip
 carla_dependency_add (
   rpclib
-  ${CARLA_RPCLIB_TAG}
-  https://github.com/carla-simulator/rpclib/archive/refs/heads/${CARLA_RPCLIB_TAG}.zip
-  https://github.com/carla-simulator/rpclib.git
+  cbfefac6544c65656f213a66eb7450d313d27673
+  https://github.com/mauromarinoni/rpclib/archive/cbfefac6544c65656f213a66eb7450d313d27673.zip
+  https://github.com/mauromarinoni/rpclib.git
 )
 
 
