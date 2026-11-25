@@ -15,6 +15,7 @@
 #include "ChaosVehicleWheel.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -64,6 +65,21 @@ static const FName MirrorTag(TEXT("Carla.Mirror"));
 static const FName CaptureParameter(TEXT("Capture"));
 static const FName CaptureWeightParameter(TEXT("CaptureWeight"));
 
+// A part split out of the body (steering wheel, column, mirror glass) follows
+// the body as drawn: attached to the skeletal mesh's root bone, not to the
+// component. After a hard collision Chaos can leave the root bone's pose, the
+// body on screen, apart from the component's transform (the actor's): parts
+// attached to the component were then drawn several centimetres off the body.
+static void AttachToRootBone(USceneComponent &Part)
+{
+  USkeletalMeshComponent *Body = Cast<USkeletalMeshComponent>(Part.GetAttachParent());
+  if (Body == nullptr || Part.GetAttachSocketName() != NAME_None || Body->GetNumBones() == 0)
+  {
+    return;
+  }
+  Part.AttachToComponent(Body, FAttachmentTransformRules::KeepWorldTransform, Body->GetBoneName(0));
+}
+
 UVehicleCockpitComponent::UVehicleCockpitComponent()
 {
   PrimaryComponentTick.bCanEverTick = true;
@@ -87,10 +103,12 @@ void UVehicleCockpitComponent::BeginPlay()
     if (Mesh->ComponentHasTag(SteeringWheelTag))
     {
       Mesh->SetMobility(EComponentMobility::Movable);
+      AttachToRootBone(*Mesh);
       SteeringWheels.Add({Mesh, Mesh->GetRelativeRotation().Quaternion()});
     }
     else if (Mesh->ComponentHasTag(SteeringColumnTag))
     {
+      AttachToRootBone(*Mesh);
       SteeringColumns.Add(Mesh);
     }
   }
@@ -125,6 +143,7 @@ void UVehicleCockpitComponent::BeginPlay()
           *Owner->GetName(), *Capture->GetName());
       continue;
     }
+    AttachToRootBone(*Glass);
     Mirrors.Add({Capture, Glass});
   }
   // A mirror shows neither its own glass nor the others (no mirror in a mirror).
