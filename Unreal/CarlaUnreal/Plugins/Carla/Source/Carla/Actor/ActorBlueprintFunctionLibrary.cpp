@@ -1606,16 +1606,16 @@ void UActorBlueprintFunctionLibrary::MakeLidarDefinition(
   AzimuthRangeEnd.RecommendedValues = {TEXT("180.0")};
 
   // ROS 2 output like a lidar driver (full rotations, per-point times).
-  FActorVariation RosDriverMode;
-  RosDriverMode.Id = TEXT("ros_driver_mode");
-  RosDriverMode.Type = EActorAttributeType::Bool;
-  RosDriverMode.RecommendedValues = {TEXT("false")};
-  RosDriverMode.bRestrictToRecommended = false;
-  // Driver-mode cut angle (ROS sensor frame, degrees).
-  FActorVariation RosScanCutAngle;
-  RosScanCutAngle.Id = TEXT("ros_scan_cut_angle");
-  RosScanCutAngle.Type = EActorAttributeType::Float;
-  RosScanCutAngle.RecommendedValues = {TEXT("180.0")};
+  FActorVariation RosFullScan;
+  RosFullScan.Id = TEXT("ros_full_scan");
+  RosFullScan.Type = EActorAttributeType::Bool;
+  RosFullScan.RecommendedValues = {TEXT("false")};
+  RosFullScan.bRestrictToRecommended = false;
+  // Full scan: azimuth where a rotation starts (ROS sensor frame, degrees).
+  FActorVariation RosFullScanStartAngle;
+  RosFullScanStartAngle.Id = TEXT("ros_full_scan_start_angle");
+  RosFullScanStartAngle.Type = EActorAttributeType::Float;
+  RosFullScanStartAngle.RecommendedValues = {TEXT("180.0")};
   // Intensity from the distance only, or from the reflectivity of what is hit.
   FActorVariation IntensityModel;
   IntensityModel.Id = TEXT("intensity_model");
@@ -1665,7 +1665,7 @@ void UActorBlueprintFunctionLibrary::MakeLidarDefinition(
 
   if (Id == "ray_cast")
   {
-    Definition.Variations.Append({RosDriverMode, RosScanCutAngle});
+    Definition.Variations.Append({RosFullScan, RosFullScanStartAngle});
     Definition.Variations.Append({IntensityModel, ReflectivityTable, IntensityNoiseStdDev});
     Definition.Variations.Append({ChannelElevations, ChannelAzimuthOffsets, ChannelHorizontalSteps});
     Definition.Variations.Append({AzimuthWindowStart, AzimuthWindowEnd});
@@ -2726,10 +2726,10 @@ void UActorBlueprintFunctionLibrary::SetLidar(
         TEXT("azimuth_range_start (%f) and azimuth_range_end (%f) must be 360 degrees apart; keeping [%f, %f]."),
         AzimuthRangeStart, AzimuthRangeEnd, Lidar.AzimuthRangeStart, Lidar.AzimuthRangeEnd);
   }
-  Lidar.RosDriverMode =
-      RetrieveActorAttributeToBool("ros_driver_mode", Description.Variations, Lidar.RosDriverMode);
-  Lidar.RosScanCutAngle =
-      RetrieveActorAttributeToFloat("ros_scan_cut_angle", Description.Variations, Lidar.RosScanCutAngle);
+  Lidar.RosFullScan =
+      RetrieveActorAttributeToBool("ros_full_scan", Description.Variations, Lidar.RosFullScan);
+  Lidar.RosFullScanStartAngle =
+      RetrieveActorAttributeToFloat("ros_full_scan_start_angle", Description.Variations, Lidar.RosFullScanStartAngle);
   Lidar.IntensityModel =
       RetrieveActorAttributeToString("intensity_model", Description.Variations, Lidar.IntensityModel);
   Lidar.ReflectivityTable =
